@@ -1,0 +1,13 @@
+[project]
+name = "livepdf"
+dependencies = [
+  "wand",
+  "PyPDF2",
+  # "msvcrt",
+]
+version = "0.1.0"
+readme = "README.md"
+license = "MIT"
+
+[tool.ruff]
+ignore = ["E731"]

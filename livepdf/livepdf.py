@@ -1,10 +1,10 @@
 #!python
 
-from typing import Callable, Sequence, Any
-from collections import deque
+from typing import Callable, Sequence
+from lazylist import map_lazylist
 
 from imgcat import imgcat
-from wand.image import Image
+from wand.image import Image # TODO: use fitz and PIL other than wand and PyPDF2
 from wand.color import Color
 from PyPDF2 import PdfReader
 from msvcrt import getch
@@ -27,6 +27,9 @@ WINDOW_STEP = 50
 COORDINATE_START = (0, 0)
 
 
+DO_NOTHING = lambda: None
+
+
 def main():
     global p
     def reload():
@@ -35,34 +38,6 @@ def main():
         p.viewer.view()
     p = PdfViewer('main.pdf', Screen(79, 44, RATIO_PIXEL_HALF_SCREEN), reload=reload)
     p.viewer.view()
-
-def test():
-    def test1():
-        from functools import reduce, partial
-        part = partial
-        pipe = lambda x, *funcs: reduce(lambda x, f: f(x), funcs, x)
-
-        def viewimgw(imgpath, width=CHAR_WIDTH_HALF_SCREEN):
-            pipe(imgpath, open, part(imgcat, width=width))
-
-        def viewimgh(imgpath, height=CHAR_HEIGHT_HALF_SCREEN):
-            pipe(imgpath, open, part(imgcat, height=height))
-
-
-        viewimgw("temp_page_0.png", CHAR_WIDTH_HALF_SCREEN)
-        viewimgh("temp_page_1.png", CHAR_HEIGHT_HALF_SCREEN)
-
-        global v
-        imgs = Image(filename="0.png"), \
-                Image(filename="1.png")
-        v = ImageViewer(imgs)
-        v.view()
-
-    def test2():
-        global a
-        a = LazyViewer(ImageSource([f'test\\{i}.png' for i in range(100)]))
-        a.view()
-    test2()
 
 
 def constrain(val, interval):
@@ -122,8 +97,9 @@ class ImageViewer(object):
     """
     Initilize data should be wand.image.Image objects.
     """
-    def __init__(self, imgs, screen=Screen(), coord_start=COORDINATE_START, reload=lambda:None):
-        self.imgs = list(imgs)
+    def __init__(self, imgs: Sequence,
+                 screen=Screen(), coord_start=COORDINATE_START, reload=DO_NOTHING):
+        self.imgs = imgs
         self.i = 0
         self.curr = self.imgs[0] if self.imgs else Image()
 
@@ -136,7 +112,7 @@ class ImageViewer(object):
         self.window_coord = Coordinate(*coord_start) # left top coordinate
         self.step = WINDOW_STEP
 
-        self.displaying: Callable | None = None
+        self.displaying: Callable = DO_NOTHING
         self.reload = reload
         self.stop = False
 
@@ -152,8 +128,8 @@ class ImageViewer(object):
         self.window.shape.size = (round(self.curr.width * self.crop_ratio),
                             round(self.curr.width * self.crop_ratio / self.window.screen.ratio))
 
-    def view(self, f=None):
-        if f is None:
+    def view(self, f=DO_NOTHING):
+        if f is DO_NOTHING:
             f = self.viewh
         f()
         while True:
@@ -211,12 +187,12 @@ class ImageViewer(object):
                 f()
         # 'display' toggle for more info
             elif ch == b'd':
-                if self.displaying is None:
+                if self.displaying is DO_NOTHING:
                     self.displaying = f
                     f = (lambda: (self.displaying(), self.display()))
                 else:
                     f = self.displaying
-                    self.displaying = None
+                    self.displaying = DO_NOTHING
                 f()
         # 's', screen atrribute adjust
             elif ch == b's':
@@ -266,87 +242,41 @@ class ImageViewer(object):
 
     def succ(self):
         self.i = (self.i + 1) % len(self.imgs)
-        self.curr = Image(self.imgs[self.i])
+        self.curr = self.imgs[self.i]
 
     def prev(self):
         self.i = (self.i + len(self.imgs) - 1) % len(self.imgs)
-        self.curr = Image(self.imgs[self.i])
+        self.curr = self.imgs[self.i]
 
     def display(self):
         print(f"Page: {self.i+1}/{len(self.imgs)}, Offset: {self.window_coord
                 }, Magnification: {self.magnification:.2f}")
 
-class ImageSource(object):
-    def __init__(self, imgs_src: Sequence,
-                 to_img: Callable[[Any], Image] = lambda f: Image(filename=f)):
-        self.imgs_src = imgs_src
-        self.to_img = to_img
-        
-    def __len__(self):
-        return len(self.imgs_src)
+class LazyViewer(ImageViewer):
+    @staticmethod
+    def path_to_img(path):
+        return Image(filename=path, resolution=200, background=Color('white'))
 
-    def __getitem__(self, index):
-        return self.to_img(self.imgs_src[index])
-
-class LazyViewer:
-    def __init__(self, img_src: ImageSource,
-                 screen=Screen(), reload=lambda: None,
-                 cache_num=6, cache_offset=-2):
-        self.img_src = img_src
-        self.length = len(img_src)
-        self.i = 0
-
-        self.screen = screen
-
-        self.cache_num = min(cache_num, self.length)
-        self.cache_offset = max(cache_offset, -self.cache_num + 1)
-        assert cache_num > 0 and cache_offset <=0 and cache_num + cache_offset > 0
-
-        self.cache = deque(maxlen=self.cache_num)
-        for idx in range(self.cache_offset, self.cache_offset + self.cache_num):
-            img = self.img_src[idx]
-            self.cache.append(img)
-
-        self.viewer = ImageViewer([self.cache[self.cache_i]], self.screen)
-        self.viewer.reload = reload
-        self.viewer.succ = self.succ
-        self.viewer.prev = self.prev
-        self.viewer.display= lambda: \
-            print(f"Page: {self.i+1}/{self.length}, Offset: {self.viewer.window_coord
-                    }, Magnification: {self.viewer.magnification:.2f}")
-
-        self.view = self.viewer.view
-
-
-    @property
-    def cache_i(self):
-        return - self.cache_offset
+    def __init__(self, imgs_src: Sequence, to_img_obj=path_to_img,
+                 screen=Screen(), coord_start=COORDINATE_START,
+                 max_cache_size=6, reload=DO_NOTHING):
+        self.lazylist = map_lazylist(to_img_obj, imgs_src, max_cache_size=max_cache_size, on_evict=lambda img: img.close())
+        super().__init__([self.lazylist[0]], screen, coord_start, reload)
 
     def succ(self):
-        self.cache[0].close()
-
-        self.i = (self.i + 1) % self.length
-        idx = (self.i + self.cache_num + self.cache_offset) % self.length
-        self.cache.append(self.img_src[idx])
-
-        curr = self.cache[self.cache_i]
-        self.viewer.imgs = [curr]
-        self.viewer.curr = curr
+        self.i = (self.i + 1) % len(self.lazylist)
+        self.curr = self.lazylist[self.i]
 
     def prev(self):
-        self.cache[self.cache_num-1].close()
+        self.i = (self.i + len(self.lazylist) - 1) % len(self.lazylist)
+        self.curr = self.lazylist[self.i]
 
-        self.i = (self.i - 1 + self.length) % self.length
-        idx = (self.i + self.cache_offset) % self.length
-        self.cache.appendleft(self.img_src[idx])
-
-        curr = self.cache[self.cache_i]
-        self.viewer.imgs = [curr]
-        self.viewer.curr = curr
-
+    def display(self):
+        print(f"Page: {self.i+1}/{len(self.lazylist)}, Offset: {self.window_coord
+                }, Magnification: {self.magnification:.2f}")
 
 class PdfViewer:
-    def __init__(self, pdf_path, screen=Screen(), reload=lambda:None):
+    def __init__(self, pdf_path, screen=Screen(), coord_start=COORDINATE_START, max_cache_size=6, reload=DO_NOTHING):
         self.page_num = len(PdfReader(open(pdf_path, 'rb')).pages)
         self.page_indices = range(self.page_num)
 
@@ -357,9 +287,10 @@ class PdfViewer:
             img = Image(blob=img.make_blob('png'))
             return img
 
-        self.lazyviewer = LazyViewer(ImageSource(self.page_indices, pdf_page_to_img),
-                                  screen, reload)
-        self.viewer = self.lazyviewer.viewer
+        self.lazyviewer = LazyViewer(self.page_indices, pdf_page_to_img,
+                                     screen=screen, coord_start=coord_start,
+                                     max_cache_size=max_cache_size, reload=reload)
+        self.viewer = self.lazyviewer
         self.view = self.viewer.view
 
 
