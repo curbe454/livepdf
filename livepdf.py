@@ -6,7 +6,7 @@ from collections import deque
 from imgcat import imgcat
 from wand.image import Image
 from wand.color import Color
-# from PyPDF2 import PdfReader
+from PyPDF2 import PdfReader
 from msvcrt import getch
 
 
@@ -337,7 +337,7 @@ class LazyViewer:
         self.cache[self.cache_num-1].close()
 
         self.i = (self.i - 1 + self.length) % self.length
-        idx = (self.i + self.cache_num + self.cache_offset) % self.length
+        idx = (self.i + self.cache_offset) % self.length
         self.cache.appendleft(self.img_src[idx])
 
         curr = self.cache[self.cache_i]
@@ -347,15 +347,17 @@ class LazyViewer:
 
 class PdfViewer:
     def __init__(self, pdf_path, screen=Screen(), reload=lambda:None):
-        self.pdf = Image(filename=pdf_path, resolution=200, background=Color('white'))
+        self.page_num = len(PdfReader(open(pdf_path, 'rb')).pages)
+        self.page_indices = range(self.page_num)
 
-        def pdf_page_to_img(p):
-            img = Image(p)
+        def pdf_page_to_img(page_index):
+            path = f"{pdf_path[:-4]}.pdf[{page_index}]"
+            img = Image(filename=path, resolution=200, background=Color('white'))
             img.merge_layers('flatten')
             img = Image(blob=img.make_blob('png'))
             return img
 
-        self.lazyviewer = LazyViewer(ImageSource(self.pdf.sequence, pdf_page_to_img),
+        self.lazyviewer = LazyViewer(ImageSource(self.page_indices, pdf_page_to_img),
                                   screen, reload)
         self.viewer = self.lazyviewer.viewer
         self.view = self.viewer.view
